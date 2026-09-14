@@ -2314,7 +2314,7 @@ int json_write_get_number_size(const struct FlJsonNumber* number, size_t* size) 
         size_t k;
 
         for (k = i; k < number->number_size; k++) {
-            const char c = *inf++;
+            const char c = *inf;
 
             /* Check if we found the Infinity string! */
             if ('\0' == c) {
@@ -2322,6 +2322,11 @@ int json_write_get_number_size(const struct FlJsonNumber* number, size_t* size) 
             } else if (c != number->number[k]) {
                 break;
             }
+
+            /* Advance only on a match: stepping past the terminator made the test
+               below read off the end of the literal, and misread a mismatch on the
+               literal's last character as a match. */
+            inf++;
         }
 
         if ('\0' == *inf) {
@@ -2343,7 +2348,7 @@ int json_write_get_number_size(const struct FlJsonNumber* number, size_t* size) 
         size_t k;
 
         for (k = i; k < number->number_size; k++) {
-            const char c = *nan++;
+            const char c = *nan;
 
             /* Check if we found the NaN string! */
             if ('\0' == c) {
@@ -2351,6 +2356,11 @@ int json_write_get_number_size(const struct FlJsonNumber* number, size_t* size) 
             } else if (c != number->number[k]) {
                 break;
             }
+
+            /* Advance only on a match: stepping past the terminator made the test
+               below read off the end of the literal, and misread a mismatch on the
+               literal's last character as a match. */
+            nan++;
         }
 
         if ('\0' == *nan) {
@@ -2572,7 +2582,7 @@ char* json_write_number(const struct FlJsonNumber* number, char* data) {
         size_t k;
 
         for (k = i; k < number->number_size; k++) {
-            const char c = *inf++;
+            const char c = *inf;
 
             /* Check if we found the Infinity string! */
             if ('\0' == c) {
@@ -2580,9 +2590,14 @@ char* json_write_number(const struct FlJsonNumber* number, char* data) {
             } else if (c != number->number[k]) {
                 break;
             }
+
+            /* Advance only on a match: stepping past the terminator made the test
+               below read off the end of the literal, and misread a mismatch on the
+               literal's last character as a match. */
+            inf++;
         }
 
-        if ('\0' == *inf++) {
+        if ('\0' == *inf) {
             const char* dbl_max;
 
             /* if we had a leading '-' we need to record it in the JSON output. */
@@ -2605,7 +2620,7 @@ char* json_write_number(const struct FlJsonNumber* number, char* data) {
         size_t k;
 
         for (k = i; k < number->number_size; k++) {
-            const char c = *nan++;
+            const char c = *nan;
 
             /* Check if we found the NaN string! */
             if ('\0' == c) {
@@ -2613,9 +2628,14 @@ char* json_write_number(const struct FlJsonNumber* number, char* data) {
             } else if (c != number->number[k]) {
                 break;
             }
+
+            /* Advance only on a match: stepping past the terminator made the test
+               below read off the end of the literal, and misread a mismatch on the
+               literal's last character as a match. */
+            nan++;
         }
 
-        if ('\0' == *nan++) {
+        if ('\0' == *nan) {
             /* NaN becomes 0 because JSON can't support it. */
             *data++ = '0';
             return data;
