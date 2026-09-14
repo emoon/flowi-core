@@ -54,10 +54,24 @@ if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
     list(JOIN SIMD_FLAGS " " SIMD_FLAGS_TEXT)
     message(STATUS "flowi-core SIMD: '${SIMD_FLAGS_TEXT}' (processor '${CMAKE_SYSTEM_PROCESSOR}', compiler ${CMAKE_C_COMPILER_ID})")
 
+    # Warnings are errors, with no opt-out. A warning a newer compiler starts emitting
+    # breaks the build on purpose: that is the point at which it is cheapest to deal
+    # with, and a warning nobody is forced to read is one nobody reads. These ride on
+    # flowi_core through apply_target_config(); the vendored dependencies keep their own
+    # flags. Core carries its own copy of this block because it also builds standalone -
+    # apply_target_config() reads the WARNING_FLAGS of whichever project calls it.
+    # clang-cl reads -Wall as MSVC's /Wall, which is clang's -Weverything - pedantic
+    # warnings this code does not aim at. /W1../W3 is where it keeps the GNU meaning.
     if(MSVC)
-        set(WARNING_FLAGS "/W3")
+        # MSVC deprecates getenv, wcscpy and friends in favour of its own _s variants.
+        # They are standard C and used correctly here (env_expand.c, os/windows.c), so
+        # with /WX that deprecation is the one thing that would fail the build without
+        # naming a real defect. Silence it rather than write non-portable code; the
+        # vendored deps (zlib, stb) each already do the same for themselves.
+        add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
+        set(WARNING_FLAGS "/W3" "/WX")
     else()
-        set(WARNING_FLAGS "-Wall")
+        set(WARNING_FLAGS "-Wall" "-Werror")
     endif()
     if(CMAKE_C_COMPILER_ID MATCHES "Clang")
         list(APPEND WARNING_FLAGS "-Wno-initializer-overrides")
