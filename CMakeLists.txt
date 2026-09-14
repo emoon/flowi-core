@@ -35,12 +35,25 @@ if(NOT WIN32)
 endif()
 
 if(CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    # The x86 baseline is SSSE3, not SSE3: simd.h builds i16x8_lerp and the table
+    # shuffles on _mm_mulhrs_epi16 and _mm_shuffle_epi8. No TU here calls them today,
+    # so the omission has been latent, but the header is ours to keep compilable.
+    # Not optional and not probed - the code does not compile without it.
     if(CMAKE_SYSTEM_PROCESSOR MATCHES "x86_64|i386|AMD64")
-        set(SIMD_FLAGS "-msse -msse2 -msse3 -msse4.1 -msse4.2")
+        set(SIMD_FLAGS -msse -msse2 -msse3 -mssse3 -msse4.1 -msse4.2)
     elseif(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|arm64")
-        set(SIMD_FLAGS "-march=armv8.2-a+fp16+simd")
+        set(SIMD_FLAGS -march=armv8.2-a+fp16+simd)
     endif()
-    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${SIMD_FLAGS}")
+
+    # add_compile_options, not CMAKE_C_FLAGS: the flags have to arrive per target.
+    # CMAKE_C_FLAGS reaches the GNU drivers but not targets under the Visual Studio
+    # generator, which is how flowi spent three weeks compiling its renderer without
+    # ssse3. Inside flowi this block is redundant - flowi sets the same options before
+    # adding this directory - but a standalone core build on Windows has only this one.
+    add_compile_options(${SIMD_FLAGS})
+    list(JOIN SIMD_FLAGS " " SIMD_FLAGS_TEXT)
+    message(STATUS "flowi-core SIMD: '${SIMD_FLAGS_TEXT}' (processor '${CMAKE_SYSTEM_PROCESSOR}', compiler ${CMAKE_C_COMPILER_ID})")
+
     if(MSVC)
         set(WARNING_FLAGS "/W3")
     else()
