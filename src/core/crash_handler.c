@@ -9,6 +9,7 @@
 #if PLATFORM_LINUX || PLATFORM_MACOS
 #include <execinfo.h>
 #include <sys/resource.h>
+#include <errno.h>
 #include <unistd.h>
 #endif
 
@@ -41,13 +42,38 @@ static struct sigaction g_prev_sigill;
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Async-signal-safe write helper - log_* functions must not be used in signal handlers.
 
+// write() may consume less than it was given and may be cut short by a signal, and it is
+// declared warn_unused_result because ignoring that loses output. Everything below goes
+// through this one loop. write() is async-signal-safe, so it is legal here; the loop gives
+// up on any real error rather than risk spinning while the process is already going down.
+
+static void safe_write_bytes(int fd, const char* bytes, size_t len) {
+    size_t offset = 0;
+
+    while (offset < len) {
+        ssize_t written = write(fd, bytes + offset, len - offset);
+
+        if (written <= 0) {
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+
+            return;
+        }
+
+        offset += (size_t)written;
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 static void safe_write(int fd, const char* str) {
     if (str != nullptr) {
         size_t len = 0;
         while (str[len] != '\0') {
             len++;
         }
-        write(fd, str, len);
+        safe_write_bytes(fd, str, len);
     }
 }
 
@@ -58,12 +84,12 @@ static void safe_write_number(int fd, int num) {
     int i = 0;
 
     if (num < 0) {
-        write(fd, "-", 1);
+        safe_write_bytes(fd, "-", 1);
         num = -num;
     }
 
     if (num == 0) {
-        write(fd, "0", 1);
+        safe_write_bytes(fd, "0", 1);
         return;
     }
 
@@ -73,7 +99,7 @@ static void safe_write_number(int fd, int num) {
     }
 
     while (i > 0) {
-        write(fd, &buf[--i], 1);
+        safe_write_bytes(fd, &buf[--i], 1);
     }
 }
 

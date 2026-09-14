@@ -182,14 +182,40 @@ bool file_rename_os(FlString old_path, FlString new_path) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// write() is allowed to consume less than it was given - a pipe with a full buffer is the
+// usual way - and both callers below return void, so there is nobody left to retry: either
+// the loop lives here or the tail of the string is silently dropped. EINTR is not a
+// failure either, only a signal that landed mid-call.
+
+static void write_all(int fd, const char* data, size_t len) {
+    size_t offset = 0;
+
+    while (offset < len) {
+        ssize_t written = write(fd, data + offset, len - offset);
+
+        if (written <= 0) {
+            if (written < 0 && errno == EINTR) {
+                continue;
+            }
+
+            // Nothing useful to do with a broken stdout, and no way to report it.
+            return;
+        }
+
+        offset += (size_t)written;
+    }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 void stdout_write_os(FlString str) {
-    write(STDOUT_FILENO, str.data, str.length);
+    write_all(STDOUT_FILENO, str.data, str.length);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void stderr_write_os(FlString str) {
-    write(STDERR_FILENO, str.data, str.length);
+    write_all(STDERR_FILENO, str.data, str.length);
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
