@@ -23,7 +23,7 @@
 //! assert!(flowi::path::is_absolute("https://example.com/x.zip"));
 //! ```
 
-use flowi_sys as sys;
+use flowi_core_sys as sys;
 
 use crate::Arena;
 
