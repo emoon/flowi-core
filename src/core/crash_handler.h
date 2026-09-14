@@ -1,0 +1,29 @@
+#pragma once
+
+#include "core.h"
+#include "crash_detector.h"
+#include "types.h"
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Crash Handler - Signal handlers for fatal signals (SIGSEGV, SIGABRT, etc.),
+// generating crash reports with stack traces.
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// Should be called early in main() before any significant work
+DLL_EXPORT void crash_handler_install(void);
+
+// Uninstall signal handlers (restore defaults)
+DLL_EXPORT void crash_handler_uninstall(void);
+
+// Set the current execution phase (for crash reports)
+DLL_EXPORT void crash_handler_set_phase(CrashPhase phase);
+
+DLL_EXPORT CrashPhase crash_handler_get_phase(void);
+
+// Enable core dumps (debug builds only)
+// On Linux, also requires: ulimit -c unlimited
+DLL_EXPORT void crash_handler_enable_core_dumps(void);
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

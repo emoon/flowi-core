@@ -1,0 +1,37 @@
+[package]
+name = "flowi_core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+default = ["native", "global-allocator"]
+# Forwarded to flowi_core_sys: build and link the native library. A host whose own build
+# already links a library containing core turns this off.
+native = ["flowi_core_sys/native"]
+global-allocator = ["flowi_core_sys/global-allocator"]
+allocation-probe = ["flowi_core_sys/allocation-probe"]
+
+[dependencies]
+flowi_core_sys = { path = "../flowi_core_sys", default-features = false }
+# Gates `Arena::alloc_zeroed<T>` on `T: Zeroable` — the trait bound is the proof
+# that an all-zero bit pattern is a valid `T` before we hand back zeroed arena
+# memory. Only the trait is used; no derive/extra features needed.
+bytemuck = { version = "1", default-features = false }
+# The logging facade every Rust caller writes against. flowi_core installs the bridge that
+# turns a `log` record into a flowi channel record, so `log` is a public dependency:
+# consumers log through it rather than through a core-specific macro.
+log = "0.4"
+
+[dev-dependencies]
+# Compile-fail proofs for the arena's ownership guarantees (use-after-rewind,
+# temp/scratch-scope escape, collection-across-rewind). trybuild compiles each
+# `tests/ui/*.rs` and diffs its committed `.stderr`.
+trybuild = "1.0"
+
+[lib]
+doctest = false
+
+# Inherit the workspace lint policy (see rust/Cargo.toml).
+[lints]
+workspace = true

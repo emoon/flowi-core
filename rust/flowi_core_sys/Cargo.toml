@@ -1,0 +1,37 @@
+[package]
+name = "flowi_core_sys"
+version = "0.0.0"
+edition = "2021"
+publish = false
+# `links` reserves the native flowi-core library so cargo serialises build-script
+# metadata and rejects a second crate linking the same C aggregate.
+links = "flowi_core"
+build = "build.rs"
+
+[lib]
+doctest = false
+
+[features]
+default = ["native", "global-allocator"]
+# Build and link the native library. A host whose own build already links a library
+# containing core - flowi's libflowi.so bundles it - turns this off so the symbols
+# resolve from there instead of from a second copy. The three FLOWI_CORE_SYS_*
+# environment variables in build.rs cover the same ground for a driving build system
+# that cannot set cargo features.
+native = []
+# Route Rust allocations through the same native heap as C. Disable when the final
+# application supplies its own global allocator.
+global-allocator = []
+# Test-only, thread-local allocation counting; absent from production builds.
+allocation-probe = ["global-allocator"]
+
+[dependencies]
+# Backs the generated bitflags-mirror types (FileChangeType).
+bitflags = "2"
+
+[build-dependencies]
+cmake = "0.1"
+
+# Inherit the workspace lint policy (see rust/Cargo.toml).
+[lints]
+workspace = true
