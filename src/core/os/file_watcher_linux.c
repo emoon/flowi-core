@@ -47,6 +47,22 @@ FileWatcherError map_errno_to_error(int err) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Removes every inotify watch this watcher holds and empties the wd -> path table. Used by normal
+// teardown and by the failure paths in platform_start_watching, where the watches added before the
+// failure must not outlive the watcher that was rejected.
+static void remove_all_watches(LinuxWatcherData* data) {
+    for (u32 i = 0; i < fixed_array_length(&data->watches); i++) {
+        WatchEntry* entry = fixed_array_get_ptr(&data->watches, i);
+        if (entry) {
+            inotify_rm_watch(data->inotify_fd, entry->wd);
+        }
+    }
+
+    fixed_array_clear(&data->watches);
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 static FlString find_path_for_wd(LinuxWatcherData* data, int wd) {
     for (u32 i = 0; i < fixed_array_length(&data->watches); i++) {
         WatchEntry* entry = fixed_array_get_ptr(&data->watches, i);
@@ -59,9 +75,22 @@ static FlString find_path_for_wd(LinuxWatcherData* data, int wd) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-// Returns 0 on success, otherwise the errno of the failing inotify_add_watch. Captured here because
-// the logging below may set errno itself, so the caller cannot read it after the fact.
+// Returns 0 on success, otherwise an errno the caller maps through map_errno_to_error(). That is
+// either the errno of a failing inotify_add_watch - captured here because the logging below may set
+// errno itself, so the caller cannot read it after the fact - or ENOSPC when the wd -> path table is
+// full.
+//
+// The table is a fixed number of slots by design. A directory that does not fit cannot be mapped
+// back from its watch descriptor, so its events would resolve to an empty path and be silently
+// dropped; refusing the watch is the honest answer. The capacity is checked before inotify_add_watch
+// so a full table costs no descriptor to roll back.
 static int add_watch_for_directory(LinuxWatcherData* data, FlString path, FlArena* arena) {
+    if (fixed_array_is_full(&data->watches)) {
+        logc_warning(FW_ID, "Watch table full (%u slots), refusing to watch %S",
+                     fixed_array_capacity(&data->watches), path);
+        return ENOSPC;
+    }
+
     OsPath os_path = string_to_os_path(arena, path);
     int wd = inotify_add_watch(data->inotify_fd, os_path_str(os_path), data->notify_mask);
     if (wd == -1) {
@@ -79,11 +108,19 @@ static int add_watch_for_directory(LinuxWatcherData* data, FlString path, FlAren
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static void add_watches_recursive(LinuxWatcherData* data, FlString base_path, FlArena* temp_arena) {
+// Returns 0 when every directory under base_path was watched, otherwise the errno that stopped the
+// walk. Stops at the first failure rather than watching what fits: a watcher that cannot map its
+// whole tree is reported as failed, not handed back watching part of it.
+//
+// An unreadable directory is still skipped rather than failed, as before - that is a property of the
+// tree, not of this watcher's capacity.
+static int add_watches_recursive(LinuxWatcherData* data, FlString base_path, FlArena* temp_arena) {
     DirHandle dir = dir_open_os(temp_arena, base_path);
     if (!dir.is_valid) {
-        return;
+        return 0;
     }
+
+    int result = 0;
 
     FileStat entry;
     while ((entry = dir_read_next_os(temp_arena, &dir)).is_valid) {
@@ -96,11 +133,19 @@ static void add_watches_recursive(LinuxWatcherData* data, FlString base_path, Fl
 
         FlString subdir_path = path_join(temp_arena, base_path, entry.name);
 
-        add_watch_for_directory(data, subdir_path, temp_arena);
-        add_watches_recursive(data, subdir_path, temp_arena);
+        result = add_watch_for_directory(data, subdir_path, temp_arena);
+        if (result != 0) {
+            break;
+        }
+
+        result = add_watches_recursive(data, subdir_path, temp_arena);
+        if (result != 0) {
+            break;
+        }
     }
 
     dir_close_os(&dir);
+    return result;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -132,13 +177,25 @@ FileWatcherError platform_start_watching(FileWatcherState* state) {
 
     const int watch_errno = add_watch_for_directory(data, state->watch_path, get_file_watcher_registry()->arena);
     if (watch_errno != 0) {
+        remove_all_watches(data);
         close(fd);
         return map_errno_to_error(watch_errno);
     }
 
     if (state->config.recursive) {
         arena_scratch_auto(temp);
-        add_watches_recursive(data, state->watch_path, temp.arena);
+        const int recursive_errno = add_watches_recursive(data, state->watch_path, temp.arena);
+        if (recursive_errno != 0) {
+            // The whole watcher fails: a handle that watches part of its tree would report some
+            // changes and silently miss others, which is worse than not starting.
+            logc_error(FW_ID, "FileWatcher[%u]: Cannot watch '%S' recursively (%u of at most %u directories): %d",
+                       state->handle, state->watch_path, fixed_array_length(&data->watches),
+                       fixed_array_capacity(&data->watches), recursive_errno);
+            remove_all_watches(data);
+            close(fd);
+            return map_errno_to_error(recursive_errno);
+        }
+
         logc_info(FW_ID, "FileWatcher[%u]: Added %u watches for recursive monitoring", state->handle,
                   fixed_array_length(&data->watches));
     }
@@ -160,12 +217,7 @@ void platform_stop_watching(FileWatcherState* state) {
 
     LinuxWatcherData* data = (LinuxWatcherData*)state->platform_data;
 
-    for (u32 i = 0; i < fixed_array_length(&data->watches); i++) {
-        WatchEntry* entry = fixed_array_get_ptr(&data->watches, i);
-        if (entry) {
-            inotify_rm_watch(data->inotify_fd, entry->wd);
-        }
-    }
+    remove_all_watches(data);
 
     if (data->inotify_fd != -1) {
         close(data->inotify_fd);
@@ -260,10 +312,24 @@ FileWatcherError platform_poll_changes(FileWatcherState* state) {
                 bool is_directory = (event->mask & IN_ISDIR) != 0;
 
                 if (data->recursive && is_directory && (event->mask & (IN_CREATE | IN_MOVED_TO))) {
-                    add_watch_for_directory(data, full_path, temp_arena);
-                    if (event->mask & IN_MOVED_TO) {
+                    int add_errno = add_watch_for_directory(data, full_path, temp_arena);
+                    if (add_errno == 0 && (event->mask & IN_MOVED_TO)) {
                         // Unlike a fresh mkdir, a moved-in directory can already have subdirectories
-                        add_watches_recursive(data, full_path, temp_arena);
+                        add_errno = add_watches_recursive(data, full_path, temp_arena);
+                    }
+
+                    if (add_errno != 0) {
+                        // A directory appeared that this watcher cannot map, so from here on it would
+                        // report some changes and silently miss others. Deactivate rather than
+                        // under-watch, the same way an unrecoverable inotify read error does above.
+                        logc_error(FW_ID,
+                                   "FileWatcher[%u]: Cannot extend watch to '%S' (%u of at most %u directories): %d "
+                                   "- deactivating watcher",
+                                   state->handle, full_path, fixed_array_length(&data->watches),
+                                   fixed_array_capacity(&data->watches), add_errno);
+                        arena_destroy(temp_arena);
+                        state->is_active = false;
+                        return map_errno_to_error(add_errno);
                     }
                 }
 
