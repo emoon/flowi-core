@@ -1,4 +1,5 @@
 #include "arena.h"
+#include "assert.h"
 #include "file_watcher_internal.h"
 #include "fixed_array.h"
 #include "log.h"
@@ -15,17 +16,24 @@ static FileWatcherRegistry g_registry = { 0 };
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-FileWatcherRegistry* get_file_watcher_registry(void) {
-    if (!g_registry.arena) {
-        FW_ID = fl_log_register_channel(S("FILE_WATCHER"));
-
-        g_registry.arena = arena_new();
-        fixed_array_new(&g_registry.watchers, g_registry.arena, 16);
-        g_registry.next_handle = 1; // Start from 1, 0 is invalid
-        mutex_init(&g_registry.lock);
-
-        logc_info(FW_ID, "File watcher system initialized");
+void file_watcher_init(void) {
+    if (g_registry.arena) {
+        return;
     }
+
+    FW_ID = fl_log_register_channel(S("FILE_WATCHER"));
+
+    g_registry.arena = arena_new();
+    fixed_array_new(&g_registry.watchers, g_registry.arena, 16);
+    g_registry.next_handle = 1; // Start from 1, 0 is invalid
+    mutex_init(&g_registry.lock);
+
+    logc_info(FW_ID, "File watcher system initialized");
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+FileWatcherRegistry* get_file_watcher_registry(void) {
     return &g_registry;
 }
 
@@ -37,6 +45,13 @@ FileWatcherState* find_watcher_state(FlFileWatcherHandle handle) {
     }
 
     FileWatcherRegistry* registry = get_file_watcher_registry();
+
+    // No registry means fl_init has not run, so there is nothing to look in and no lock to take.
+    if (!registry->arena) {
+        return nullptr;
+    }
+
+    mutex_lock_auto(&registry->lock);
 
     for_count(i, fixed_array_length(&registry->watchers)) {
         FileWatcherState* watcher = fixed_array_get_ptr(&registry->watchers, i);
@@ -51,31 +66,65 @@ FileWatcherState* find_watcher_state(FlFileWatcherHandle handle) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// Must be called with the registry lock held: the tombstone it leaves behind is what lets
+// file_watcher_start hand the slot out again.
+static void destroy_watcher_state(FileWatcherState* watcher) {
+    // Platform cleanup first (stops callbacks from being invoked)
+    if (watcher->platform_data) {
+        platform_stop_watching(watcher);
+    }
+
+    mutex_destroy(&watcher->changes_lock);
+    arena_destroy(watcher->changes_arena);
+    watcher->changes_arena = nullptr;
+
+    // Tombstone the slot rather than compacting the array: platform layers (FSEvents on
+    // macOS) retain the FileWatcherState* passed to platform_start_watching for the lifetime
+    // of the stream, so no watcher's state may ever move.
+    watcher->handle = FL_FILE_WATCHER_INVALID;
+    watcher->is_active = false;
+    watcher->platform_data = nullptr;
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
 static void remove_watcher_state(FlFileWatcherHandle handle) {
     FileWatcherRegistry* registry = get_file_watcher_registry();
+
+    mutex_lock_auto(&registry->lock);
 
     for_count(i, fixed_array_length(&registry->watchers)) {
         FileWatcherState* watcher = fixed_array_get_ptr(&registry->watchers, i);
         ANALYZER_ASSUME_NONNULL(watcher);
         if (watcher->handle == handle) {
-            // Platform cleanup first (stops callbacks from being invoked)
-            if (watcher->platform_data) {
-                platform_stop_watching(watcher);
-            }
-
-            mutex_destroy(&watcher->changes_lock);
-            arena_destroy(watcher->changes_arena);
-            watcher->changes_arena = nullptr;
-
-            // Tombstone the slot rather than compacting the array: platform layers (FSEvents on
-            // macOS) retain the FileWatcherState* passed to platform_start_watching for the lifetime
-            // of the stream, so no watcher's state may ever move.
-            watcher->handle = FL_FILE_WATCHER_INVALID;
-            watcher->is_active = false;
-            watcher->platform_data = nullptr;
+            destroy_watcher_state(watcher);
             return;
         }
     }
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+void file_watcher_destroy(void) {
+    if (!g_registry.arena) {
+        return;
+    }
+
+    mutex_lock(&g_registry.lock);
+
+    for_count(i, fixed_array_length(&g_registry.watchers)) {
+        FileWatcherState* watcher = fixed_array_get_ptr(&g_registry.watchers, i);
+        ANALYZER_ASSUME_NONNULL(watcher);
+        if (watcher->handle != FL_FILE_WATCHER_INVALID) {
+            destroy_watcher_state(watcher);
+        }
+    }
+
+    mutex_unlock(&g_registry.lock);
+
+    mutex_destroy(&g_registry.lock);
+    arena_destroy(g_registry.arena);
+    g_registry = (FileWatcherRegistry) { 0 };
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -223,6 +272,10 @@ void add_file_change(FileWatcherState* watcher, FlString path, FlString old_path
 FlFileWatcherHandle file_watcher_start(FlString path, FlFileWatcherConfig config) {
     FileWatcherRegistry* registry = get_file_watcher_registry();
 
+    // The registry comes up with the foundation, so a watch started before fl_init has no arena
+    // to allocate from and no lock to take.
+    FL_VALIDATE_RET(registry->arena != nullptr, FL_FILE_WATCHER_INVALID);
+
     if (!file_exists_os(path) && !file_directory_exists_os(path)) {
         logc_error(FW_ID, "Path does not exist: %.*s", (int)path.length, path.data);
         return FL_FILE_WATCHER_INVALID;
@@ -244,9 +297,10 @@ FlFileWatcherHandle file_watcher_start(FlString path, FlFileWatcherConfig config
 
     if (!watcher) {
         if (fixed_array_is_full(&registry->watchers)) {
+            u32 capacity = fixed_array_capacity(&registry->watchers);
             mutex_unlock(&registry->lock);
-            logc_error(FW_ID, "Cannot start watcher: registry full (%u active), path: %.*s",
-                       fixed_array_capacity(&registry->watchers), (int)path.length, path.data);
+            logc_error(FW_ID, "Cannot start watcher: registry full (%u active), path: %.*s", capacity,
+                       (int)path.length, path.data);
             return FL_FILE_WATCHER_INVALID;
         }
         FileWatcherState empty = { 0 };
@@ -343,11 +397,10 @@ FileWatcherCallbackHandle file_watcher_register_callback(FlFileWatcherHandle han
 
     CallbackRegistration* reg = &watcher->callbacks[watcher->active_callback_count];
 
-    // This is the only site in the file that holds changes_lock and registry->lock at once; every
-    // other site takes exactly one of them. Keep it that way, or pick changes_lock -> registry->lock
-    // as the nesting order.
+    // The registry arena allocates lock-free, so the path copy needs no registry lock. Taking one
+    // here would nest it inside changes_lock, and teardown holds the registry lock across
+    // platform_stop_watching, which can wait for a platform callback blocked on changes_lock.
     FileWatcherRegistry* registry = get_file_watcher_registry();
-    mutex_lock(&registry->lock);
 
     reg->handle = watcher->next_callback_handle++;
     reg->file_path = string_copy(registry->arena, file_path);
@@ -359,8 +412,6 @@ FileWatcherCallbackHandle file_watcher_register_callback(FlFileWatcherHandle han
     }
 
     watcher->active_callback_count++;
-
-    mutex_unlock(&registry->lock);
 
     FileWatcherCallbackHandle callback_handle = reg->handle;
     mutex_unlock(&watcher->changes_lock);

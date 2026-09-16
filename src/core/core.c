@@ -3,6 +3,7 @@
 #include "arena_alloc_tracker.h"
 #include "arena_watchdog.h"
 #include "error_report.h"
+#include "file_watcher.h"
 #include "jobsys.h"
 #include "log.h"
 #include "perf_scope.h"
@@ -40,6 +41,9 @@ FlArena* fl_init(int job_threads) {
 
     fl_log_set_level(LogLevel_Trace);
 
+    // After the log level, so the watcher channel is registered at the level the rest of core gets.
+    file_watcher_init();
+
     s_main_arena = main_arena;
     s_initialized = true;
     return main_arena;
@@ -74,6 +78,10 @@ void fl_destroy(void) {
     fl_perf_scope_destroy();
     error_report_destroy();
     fl_jobs_destroy();
+
+    // After the jobs, so no worker can be inside a watcher call while the registry goes away.
+    file_watcher_destroy();
+
     arena_watchdog_destroy();
 
     // The arenas unregister themselves as they go, so the tracker outlives every one of them.

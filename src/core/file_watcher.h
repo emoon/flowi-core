@@ -40,6 +40,16 @@ typedef u32 FileWatcherCallbackHandle;
 #define FILE_WATCHER_CALLBACK_INVALID ((FileWatcherCallbackHandle)0)
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Registry lifecycle - called by fl_init / fl_destroy, never by a watcher caller
+
+// Brings the process-wide watcher registry up. Runs before any thread can start a watch, so the
+// registry lock exists by the time two mounts race for it.
+void file_watcher_init(void);
+
+// Stops every watcher still running and releases the registry.
+void file_watcher_destroy(void);
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Watch Management
 
 FlFileWatcherHandle file_watcher_start(FlString path, FlFileWatcherConfig config);

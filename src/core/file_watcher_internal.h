@@ -69,9 +69,14 @@ typedef struct FileWatcherRegistry {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Internal functions for platform implementations
 
-// Initializes the registry on first call.
+// The registry, already brought up by file_watcher_init. Its arena is null until then.
 FileWatcherRegistry* get_file_watcher_registry(void);
 
+// Walks the watcher array under the registry lock and hands the slot back; slots are tombstoned
+// rather than compacted, so the pointer stays valid after the lock drops.
+//
+// Valid, but not pinned: a stop of the same handle can still destroy the changes lock under a
+// caller. Per-watcher refcounts if one handle ever gets shared across threads.
 FileWatcherState* find_watcher_state(FlFileWatcherHandle handle);
 
 void add_file_change(FileWatcherState* watcher, FlString path, FlString old_path, u32 change_types, bool is_directory);
