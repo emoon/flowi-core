@@ -106,7 +106,7 @@ endif()
 ################################################################################
 
 # All three watcher backends compile everywhere; each guards itself on the platform macro.
-# The perf_counters_* backends are #included by perf_counters.c, so they are not listed.
+# The Linux perf_counters backend is #included by perf_counters.c, so it is not listed.
 set(PLATFORM_SOURCES
     ${CORE}/os/file_watcher_linux.c ${CORE}/os/file_watcher_macos.c
     ${CORE}/os/file_watcher_windows.c)
