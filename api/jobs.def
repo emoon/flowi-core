@@ -53,11 +53,18 @@ api Jobs {
     /// Schedule a job; returns its handle (or the immediate-complete sentinel when
     /// run synchronously from a worker).
     [manual] add_job(func: JobsFunc, user_data: *void) -> JobHandle
-    /// Schedule a job that runs only after dependency completes.
+    /// Schedule a job that runs only after dependency completes. A dependency of
+    /// zero, the immediate-complete sentinel, or an expired handle counts as
+    /// already satisfied and the job is scheduled as if it had none. Scheduled
+    /// from a worker against an unfinished dependency the job is deferred rather
+    /// than run inline, so the returned handle is genuinely pending.
     [manual] add_job_with_dependency(func: JobsFunc, user_data: *void, dependency: JobHandle) -> JobHandle
     /// Query whether a job has finished.
     [manual] is_finished(handle: JobHandle) -> JobsResult
-    /// Block until handle completes.
+    /// Block until handle completes. Only the main thread blocks: called from any
+    /// other thread this returns at once without waiting, since a worker blocking
+    /// on a job that still needs a worker to run would deadlock the pool. Poll
+    /// fl_jobs_is_finished there instead.
     [manual] wait(handle: JobHandle)
     /// Destroy the global job system, joining all workers.
     [manual] destroy()
@@ -65,7 +72,8 @@ api Jobs {
     [manual] num_threads() -> i32
     /// Schedule a job at a given priority.
     [manual] add_job_with_priority(func: JobsFunc, user_data: *void, priority: JobPriority) -> JobHandle
-    /// Schedule a priority job that runs only after dependency completes.
+    /// Schedule a priority job that runs only after dependency completes - see
+    /// add_job_with_dependency for how the dependency is honored.
     [manual] add_job_with_priority_and_dependency(func: JobsFunc, user_data: *void, priority: JobPriority, dependency: JobHandle) -> JobHandle
     /// Change a pending job's priority. Returns true if changed, false if it already
     /// started/completed or the handle is invalid.

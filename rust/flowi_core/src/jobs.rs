@@ -9,6 +9,10 @@
 //! caught at the FFI boundary and logged at error level; the job fails to finish its
 //! work rather than aborting the process.
 //!
+//! Only the main thread can block on a handle. [`Jobs::wait`] returns straight away
+//! everywhere else, so a job body that needs ordering expresses it with
+//! [`Jobs::add_after`] rather than by waiting.
+//!
 //! These calls operate on the process-global job system and do not bring it up.
 //! Application::new, Application::embedded or a bare [`crate::init`] does that once
 //! at startup; scheduling before then panics. Creating and destroying the system is
@@ -105,6 +109,12 @@ impl Jobs {
     /// Schedule f to run only after dependency completes (Normal priority);
     /// returns its [`JobHandle`]. See [`Jobs::add`] for the closure contract.
     ///
+    /// [`JobHandle::INVALID`], an expired handle, and one whose job has already
+    /// finished all count as "no dependency", so f is simply scheduled. Called from
+    /// a job body against a dependency that is still running, f is deferred rather
+    /// than run inline - ordering holds on a worker too, but the returned handle is
+    /// then genuinely pending and only the main thread can wait it out.
+    ///
     /// # Panics
     /// Panics if the foundation is not up - see the module docs on lifecycle.
     pub fn add_after<F>(f: F, dependency: JobHandle) -> JobHandle
@@ -120,7 +130,8 @@ impl Jobs {
     }
 
     /// Schedule f at priority, to run only after dependency completes; returns
-    /// its [`JobHandle`]. See [`Jobs::add`] for the closure contract.
+    /// its [`JobHandle`]. See [`Jobs::add_after`] for how the dependency is honored
+    /// and [`Jobs::add`] for the closure contract.
     ///
     /// # Panics
     /// Panics if the foundation is not up - see the module docs on lifecycle.
@@ -153,10 +164,13 @@ impl Jobs {
         unsafe { sys::fl_jobs_is_finished(handle) }
     }
 
-    /// Block the calling thread until handle completes.
+    /// Block the calling thread until handle completes - on the main thread only.
+    /// From a job body or any other thread this returns at once without waiting,
+    /// because a worker parked here could be the one the awaited job needs to run.
+    /// Poll [`Jobs::is_finished`] there, or chain the work with [`Jobs::add_after`].
     #[inline]
     pub fn wait(handle: JobHandle) {
-        // SAFETY: a plain blocking query over a Copy handle value.
+        // SAFETY: a plain query over a Copy handle value; blocking on the main thread only.
         unsafe { sys::fl_jobs_wait(handle) }
     }
 

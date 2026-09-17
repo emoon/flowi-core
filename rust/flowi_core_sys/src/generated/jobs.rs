@@ -81,11 +81,18 @@ extern "C" {
     /// Schedule a job; returns its handle (or the immediate-complete sentinel when
     /// run synchronously from a worker).
     pub fn fl_jobs_add_job(func: crate::JobsFunc, user_data: *mut core::ffi::c_void) -> crate::JobHandle;
-    /// Schedule a job that runs only after dependency completes.
+    /// Schedule a job that runs only after dependency completes. A dependency of
+    /// zero, the immediate-complete sentinel, or an expired handle counts as
+    /// already satisfied and the job is scheduled as if it had none. Scheduled
+    /// from a worker against an unfinished dependency the job is deferred rather
+    /// than run inline, so the returned handle is genuinely pending.
     pub fn fl_jobs_add_job_with_dependency(func: crate::JobsFunc, user_data: *mut core::ffi::c_void, dependency: crate::JobHandle) -> crate::JobHandle;
     /// Query whether a job has finished.
     pub fn fl_jobs_is_finished(handle: crate::JobHandle) -> crate::JobsResult;
-    /// Block until handle completes.
+    /// Block until handle completes. Only the main thread blocks: called from any
+    /// other thread this returns at once without waiting, since a worker blocking
+    /// on a job that still needs a worker to run would deadlock the pool. Poll
+    /// fl_jobs_is_finished there instead.
     pub fn fl_jobs_wait(handle: crate::JobHandle);
     /// Destroy the global job system, joining all workers.
     pub fn fl_jobs_destroy();
@@ -93,7 +100,8 @@ extern "C" {
     pub fn fl_jobs_num_threads() -> i32;
     /// Schedule a job at a given priority.
     pub fn fl_jobs_add_job_with_priority(func: crate::JobsFunc, user_data: *mut core::ffi::c_void, priority: crate::JobPriority) -> crate::JobHandle;
-    /// Schedule a priority job that runs only after dependency completes.
+    /// Schedule a priority job that runs only after dependency completes - see
+    /// add_job_with_dependency for how the dependency is honored.
     pub fn fl_jobs_add_job_with_priority_and_dependency(func: crate::JobsFunc, user_data: *mut core::ffi::c_void, priority: crate::JobPriority, dependency: crate::JobHandle) -> crate::JobHandle;
     /// Change a pending job's priority. Returns true if changed, false if it already
     /// started/completed or the handle is invalid.

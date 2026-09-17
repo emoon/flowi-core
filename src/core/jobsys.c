@@ -49,7 +49,7 @@ typedef struct JobInfo {
 struct WorkerData;
 
 static void promote_dependent_jobs(JobInfo* completed_job);
-static void execute_job(JobInfo* work_job, FlJobsWorkerInfo* worker_info);
+static void execute_job(JobInfo* work_job, FlJobsWorkerInfo* worker_info, bool nested);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -64,8 +64,9 @@ typedef struct Jobs {
     FlArena* arena;
     queue_t work_queues[JOB_PRIORITY_COUNT]; // Lock-free queues per priority level (Low, Normal, High)
     JobInfo* first_free_entity;              // Free job objects, guarded by free_list_mutex
-    Mutex free_list_mutex; // Guards first_free_entity and job arena growth: jobs are added and polled from
-                           // any non-worker thread (e.g. an I/O subsystem issuing work off the main thread)
+    Mutex free_list_mutex; // Guards first_free_entity and job arena growth. Contended from any thread: jobs
+                           // are added and polled off the main thread (e.g. an I/O subsystem issuing work),
+                           // and a worker takes it too when it parks a dependent behind a live dependency
     Thread* threads;
     bool* threads_created; // Per-slot creation success; failed slots must never be joined
     JobInfo* start_jobs;
@@ -125,7 +126,7 @@ static void schedule_job_with_priority(Jobs* self, JobInfo* job, JobPriority pri
         if (s_current_worker_info != nullptr) {
             u32 expected = JOB_STATUS_NOT_STARTED;
             if (atomic_compare_exchange_strong(&job->status, &expected, JOB_STATUS_CLAIMED)) {
-                execute_job(job, s_current_worker_info);
+                execute_job(job, s_current_worker_info, true);
             }
             // CAS failure means another thread already owns the job - nothing left to do here.
             return;
@@ -205,13 +206,21 @@ static bool try_dequeue_prioritized(Jobs* self, JobInfo** out_job) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-static void execute_job(JobInfo* work_job, FlJobsWorkerInfo* worker_info) {
+static void execute_job(JobInfo* work_job, FlJobsWorkerInfo* worker_info, bool nested) {
     FlJobsFunc func = atomic_load(&work_job->function);
     void* user_data = atomic_load(&work_job->user_data);
+    FlTempArena scratch_scope = arena_temp_begin(worker_info->scratch);
     func(user_data, *worker_info);
 
     jobs_context_free(user_data);
-    arena_rewind(worker_info->scratch);
+    // A nested run is inline on a worker whose outer job is still on the stack holding its own scratch
+    // allocations, so it may only give back what it took. arena_rewind would take the whole arena: it drops
+    // to the rewind floor, poisons everything above it and releases the pages.
+    if (nested) {
+        arena_temp_end(scratch_scope);
+    } else {
+        arena_rewind(worker_info->scratch);
+    }
     // Publish PROMOTING (release) before draining dependents: it is the release point for the job's
     // writes, and the signal a racing fl_jobs_add_job_with_dependency needs to self-promote a dependent
     // prepended after the drain below. PROMOTING is not recyclable - fl_jobs_is_finished reports it as
@@ -238,7 +247,7 @@ static void wait_for_work(Jobs* self, FlJobsWorkerInfo* worker_info) {
     if (try_dequeue_prioritized(self, &work_job)) {
         atomic_fetch_sub(&self->idle_workers, 1);
         mutex_unlock(&self->idle_mutex);
-        execute_job(work_job, worker_info);
+        execute_job(work_job, worker_info, false);
         return;
     }
 
@@ -294,7 +303,7 @@ static void* worker_thread(void* arg) {
 
         JobInfo* work_job = nullptr;
         if (try_dequeue_prioritized(self, &work_job)) {
-            execute_job(work_job, &info);
+            execute_job(work_job, &info, false);
         } else {
             wait_for_work(self, &info);
         }
@@ -439,15 +448,8 @@ FlJobHandle fl_jobs_add_job_with_priority_and_dependency(FlJobsFunc func, void* 
     FL_VALIDATE_RET(self != nullptr, 0);
     FL_VALIDATE_RET(func != nullptr, 0);
 
-    // The dependency is ignored here: we are already inside a job.
-    // Use arena_temp_begin/end to preserve the caller's scratch allocations.
-    if (!fl_jobs_is_main_thread() && s_current_worker_info) {
-        FlTempArena temp = arena_temp_begin(s_current_worker_info->scratch);
-        func(user_data, *s_current_worker_info);
-        jobs_context_free(user_data);
-        arena_temp_end(temp);
-        return JOB_HANDLE_IMMEDIATE_COMPLETE;
-    }
+    // No worker fast path here: a worker cannot wait an unfinished dependency out (fl_jobs_wait is a no-op
+    // there), so the job has to be parked on the dependency's dependent list below rather than run inline.
 
     if (dependency == 0) {
         return fl_jobs_add_job_with_priority(func, user_data, priority);
@@ -471,7 +473,8 @@ FlJobHandle fl_jobs_add_job_with_priority_and_dependency(FlJobsFunc func, void* 
         return fl_jobs_add_job_with_priority(func, user_data, priority);
     }
 
-    // Get a job from the free list or allocate. Guarded: jobs are added from any non-worker thread.
+    // Get a job from the free list or allocate. Guarded: a worker reaches this too, so the free list is
+    // contended by workers and producers alike.
     mutex_lock(&self->free_list_mutex);
     JobInfo* job = self->first_free_entity;
     if (job != nullptr) {

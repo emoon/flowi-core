@@ -61,11 +61,18 @@ FL_API void fl_jobs_create(FlArena* arena, int32_t num_threads);
 // Schedule a job; returns its handle (or the immediate-complete sentinel when
 // run synchronously from a worker).
 FL_API FlJobHandle fl_jobs_add_job(FlJobsFunc func, void* user_data);
-// Schedule a job that runs only after dependency completes.
+// Schedule a job that runs only after dependency completes. A dependency of
+// zero, the immediate-complete sentinel, or an expired handle counts as
+// already satisfied and the job is scheduled as if it had none. Scheduled
+// from a worker against an unfinished dependency the job is deferred rather
+// than run inline, so the returned handle is genuinely pending.
 FL_API FlJobHandle fl_jobs_add_job_with_dependency(FlJobsFunc func, void* user_data, FlJobHandle dependency);
 // Query whether a job has finished.
 FL_API FlJobsResult fl_jobs_is_finished(FlJobHandle handle);
-// Block until handle completes.
+// Block until handle completes. Only the main thread blocks: called from any
+// other thread this returns at once without waiting, since a worker blocking
+// on a job that still needs a worker to run would deadlock the pool. Poll
+// fl_jobs_is_finished there instead.
 FL_API void fl_jobs_wait(FlJobHandle handle);
 // Destroy the global job system, joining all workers.
 FL_API void fl_jobs_destroy(void);
@@ -73,7 +80,8 @@ FL_API void fl_jobs_destroy(void);
 FL_API int32_t fl_jobs_num_threads(void);
 // Schedule a job at a given priority.
 FL_API FlJobHandle fl_jobs_add_job_with_priority(FlJobsFunc func, void* user_data, FlJobPriority priority);
-// Schedule a priority job that runs only after dependency completes.
+// Schedule a priority job that runs only after dependency completes - see
+// add_job_with_dependency for how the dependency is honored.
 FL_API FlJobHandle fl_jobs_add_job_with_priority_and_dependency(FlJobsFunc func, void* user_data, FlJobPriority priority, FlJobHandle dependency);
 // Change a pending job's priority. Returns true if changed, false if it already
 // started/completed or the handle is invalid.
