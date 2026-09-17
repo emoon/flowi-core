@@ -1023,36 +1023,11 @@ void os_thread_set_name(const char* name) {
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 bool os_thread_set_affinity(Thread* thread, const int* cpu_ids, int count) {
-    // Windows thread affinity is not implemented yet - just return success (no-op)
+    // TODO: implement via SetThreadAffinityMask, which needs processor-group handling above 64 CPUs.
     (void)thread;
     (void)cpu_ids;
     (void)count;
-    return true;
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-bool os_thread_set_priority(Thread* thread, ThreadPriority priority) {
-    HANDLE thread_handle;
-    if (thread == nullptr) {
-        thread_handle = GetCurrentThread();
-    } else {
-        WindowsThread* wt = (WindowsThread*)thread;
-        thread_handle = wt->handle;
-    }
-
-    int win_priority;
-    switch (priority) {
-        case THREAD_PRIO_LOW:
-            win_priority = THREAD_PRIORITY_BELOW_NORMAL;
-            break;
-        case THREAD_PRIO_NORMAL:
-        default:
-            win_priority = THREAD_PRIORITY_NORMAL;
-            break;
-    }
-
-    return SetThreadPriority(thread_handle, win_priority) != 0;
+    return false;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

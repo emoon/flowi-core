@@ -9,7 +9,7 @@ struct Thread;
 // CPU Topology Detection
 //
 // Linux: detects core types by reading CPU frequency from /sys/devices/system/cpu/
-// macOS/Windows: returns all cores as Unknown, affinity setting is a no-op
+// macOS/Windows: returns all cores as Unknown, and affinity setting always fails as unsupported
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -63,7 +63,8 @@ bool cpu_online_from_sysfs(bool file_exists, int value);
 CpuIdList cpu_query_by_type(CoreType type, struct FlArena* arena);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Pins a thread (nullptr for the current one) to run only on the given CPUs. Returns true on
-// success or where affinity is unsupported, false on error.
+// Pins a thread (nullptr for the current one) to run only on the given CPUs. Returns true only when
+// the pinning was applied; false on error, on a cpu id the platform does not have, and on platforms
+// with no affinity support. An empty list is a no-op that succeeds where affinity is supported.
 
 bool cpu_set_thread_affinity(struct Thread* thread, CpuIdList cpus);

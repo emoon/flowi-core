@@ -181,19 +181,10 @@ u64 os_thread_get_current_id(void);
 // name is truncated to 15 characters on Linux (pthread_setname_np limit)
 void os_thread_set_name(const char* name);
 
-// thread: nullptr = current thread. Returns false on failure or if not supported
+// thread: nullptr = current thread. True only when the requested affinity was applied; false on
+// failure, on a cpu id outside the platform's range, and on platforms that perform no affinity work
+// at all. Linux is the only one that performs any; an empty list there is a no-op that succeeds.
 bool os_thread_set_affinity(Thread* thread, const int* cpu_ids, int count);
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Thread priority
-
-typedef enum ThreadPriority {
-    THREAD_PRIO_LOW = -10, // Background work (nice 10 on Linux, BELOW_NORMAL on Windows)
-    THREAD_PRIO_NORMAL = 0,
-} ThreadPriority;
-
-// thread: nullptr = current thread
-bool os_thread_set_priority(Thread* thread, ThreadPriority priority);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Memory management functions

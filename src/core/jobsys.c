@@ -372,12 +372,20 @@ void fl_jobs_create(FlArena* arena, const int num_threads) {
         arena_scratch_auto(temp);
         CpuIdList eff_cpus = cpu_query_by_type(CoreType_Efficiency, temp.arena);
         if (eff_cpus.count > 0) {
+            int pinned = 0;
+            int attempted = 0;
             for_count(i, num_threads) {
                 if (self->threads_created[i]) {
-                    cpu_set_thread_affinity(&self->threads[i], eff_cpus);
+                    attempted++;
+                    pinned += cpu_set_thread_affinity(&self->threads[i], eff_cpus) ? 1 : 0;
                 }
             }
-            log_info("Pinned %d worker thread(s) to %d efficiency core(s)", num_threads, eff_cpus.count);
+            if (pinned == attempted) {
+                log_info("Pinned %d worker thread(s) to %d efficiency core(s)", pinned, eff_cpus.count);
+            } else {
+                log_warning("Pinned %d of %d worker thread(s) to %d efficiency core(s)", pinned, attempted,
+                            eff_cpus.count);
+            }
         }
     }
 #endif

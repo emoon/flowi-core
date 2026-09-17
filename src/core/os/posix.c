@@ -4,12 +4,9 @@
 #include "os.h"
 #include <errno.h>
 #include <fcntl.h>
-#include <stdatomic.h>
 #include <unistd.h>
 #if PLATFORM_LINUX
 #include <sched.h>
-#include <sys/resource.h>
-#include <sys/syscall.h>
 #endif
 #if PLATFORM_MACOS
 #include <mach-o/dyld.h>
@@ -797,59 +794,15 @@ int execute_command_os(FlString command) {
 
 typedef struct {
     pthread_t pthread;
-#if PLATFORM_LINUX
-    _Atomic(pid_t) tid; // Linux thread ID (for setpriority)
-#endif
 } PosixThread;
 
 _Static_assert(sizeof(PosixThread) <= sizeof(Thread), "Thread structure too small for pthread_t");
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#if PLATFORM_LINUX
-typedef struct {
-    ThreadFunc func;
-    void* user_data;
-    _Atomic(pid_t)* tid_ptr;
-} ThreadStartData;
-
-static void* thread_entry_wrapper(void* arg) {
-    ThreadStartData* data = (ThreadStartData*)arg;
-    ThreadFunc func = data->func;
-    void* user_data = data->user_data;
-
-    atomic_store(data->tid_ptr, (pid_t)syscall(SYS_gettid));
-    mi_free(data);
-
-    return func(user_data);
-}
-#endif
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
 bool os_thread_create(Thread* thread, ThreadFunc func, void* user_data) {
     PosixThread* pt = (PosixThread*)thread;
-
-#if PLATFORM_LINUX
-    ThreadStartData* data = mi_alloc(ThreadStartData);
-    if (!data) {
-        return false;
-    }
-    data->func = func;
-    data->user_data = user_data;
-    data->tid_ptr = &pt->tid;
-    atomic_store(&pt->tid, 0);
-
-    int result = pthread_create(&pt->pthread, nullptr, thread_entry_wrapper, data);
-    if (result != 0) {
-        mi_free(data);
-        return false;
-    }
-    return true;
-#else
-    int result = pthread_create(&pt->pthread, nullptr, func, user_data);
-    return result == 0;
-#endif
+    return pthread_create(&pt->pthread, nullptr, func, user_data) == 0;
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -899,9 +852,10 @@ bool os_thread_set_affinity(Thread* thread, const int* cpu_ids, int count) {
     CPU_ZERO(&cpu_set);
 
     for_count(i, count) {
-        if (cpu_ids[i] >= 0 && cpu_ids[i] < CPU_SETSIZE) {
-            CPU_SET(cpu_ids[i], &cpu_set);
+        if (cpu_ids[i] < 0 || cpu_ids[i] >= CPU_SETSIZE) {
+            return false;
         }
+        CPU_SET(cpu_ids[i], &cpu_set);
     }
 
     pthread_t pthread_handle;
@@ -915,62 +869,11 @@ bool os_thread_set_affinity(Thread* thread, const int* cpu_ids, int count) {
     int result = pthread_setaffinity_np(pthread_handle, sizeof(cpu_set_t), &cpu_set);
     return result == 0;
 #else
-    // macOS doesn't support thread affinity in the same way
+    // No portable pthread affinity call outside Linux; macOS offers only scheduling-affinity hints.
     (void)thread;
     (void)cpu_ids;
     (void)count;
-    return true;
-#endif
-}
-
-///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-bool os_thread_set_priority(Thread* thread, ThreadPriority priority) {
-#if PLATFORM_LINUX
-    int nice_value;
-    switch (priority) {
-        case THREAD_PRIO_LOW:
-            nice_value = 10;
-            break;
-        case THREAD_PRIO_NORMAL:
-        default:
-            nice_value = 0;
-            break;
-    }
-
-    pid_t tid;
-    if (thread == nullptr) {
-        tid = (pid_t)syscall(SYS_gettid);
-    } else {
-        PosixThread* pt = (PosixThread*)thread;
-        tid = atomic_load(&pt->tid);
-
-        // Wait briefly if TID not yet set (thread just started)
-        int retries = 100;
-        while (tid == 0 && retries-- > 0) {
-            usleep(1000); // 1ms
-            tid = atomic_load(&pt->tid);
-        }
-
-        if (tid == 0) {
-            return false;
-        }
-    }
-
-    // setpriority returns -1 on error, but -1 is also a valid nice value
-    // so we need to clear errno first and check it after
-    errno = 0;
-    int result = setpriority(PRIO_PROCESS, tid, nice_value);
-    if (result == -1 && errno != 0) {
-        return false;
-    }
-
-    return true;
-#else
-    // macOS: not implemented yet, just return success
-    (void)thread;
-    (void)priority;
-    return true;
+    return false;
 #endif
 }
 
