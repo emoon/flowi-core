@@ -246,7 +246,8 @@ void arena_scratch_end(const FlTempArena temp_arena) {
 void arena_compact_bytes(FlArena* self, u64 bytes_to_release) {
     FL_ASSERT(self != nullptr);
     u64 current_pos = atomic_load_explicit(&self->pos, memory_order_relaxed);
-    FL_ASSERT(bytes_to_release <= current_pos);
+    // Releasing more than the arena holds would wrap pos past the end of the reservation.
+    FL_ASSERT_FATAL(bytes_to_release <= current_pos);
     atomic_store_explicit(&self->pos, current_pos - bytes_to_release, memory_order_relaxed);
 }
 

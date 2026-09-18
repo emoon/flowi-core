@@ -68,19 +68,20 @@
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define arena_typed_alloc_fixed_array(typed_arena_ptr, count)                                                       \
-    ({                                                                                                              \
-        typedef __typeof__(*(typed_arena_ptr)->_element_type) _element_t;                                           \
-        (_element_t*)arena_alloc_raw((typed_arena_ptr)->arena, (count) * sizeof(_element_t), align_of(_element_t)); \
+#define arena_typed_alloc_fixed_array(typed_arena_ptr, count)                                                  \
+    ({                                                                                                         \
+        typedef __typeof__(*(typed_arena_ptr)->_element_type) _element_t;                                      \
+        (_element_t*)arena_alloc_raw((typed_arena_ptr)->arena, arena_array_bytes((count), sizeof(_element_t)), \
+                                     align_of(_element_t));                                                    \
     })
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-#define arena_typed_alloc_array_zero(typed_arena_ptr, count)                                      \
-    ({                                                                                            \
-        typedef __typeof__(*(typed_arena_ptr)->_element_type) _element_t;                         \
-        (_element_t*)arena_alloc_raw_zero((typed_arena_ptr)->arena, (count) * sizeof(_element_t), \
-                                          align_of(_element_t));                                  \
+#define arena_typed_alloc_array_zero(typed_arena_ptr, count)                                                        \
+    ({                                                                                                              \
+        typedef __typeof__(*(typed_arena_ptr)->_element_type) _element_t;                                           \
+        (_element_t*)arena_alloc_raw_zero((typed_arena_ptr)->arena, arena_array_bytes((count), sizeof(_element_t)), \
+                                          align_of(_element_t));                                                    \
     })
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

@@ -143,10 +143,13 @@ impl Arena {
         p as *mut u8
     }
 
-    /// Allocate zero-initialized, aligned bytes for count elements of T.
+    /// Allocate zero-initialized, aligned bytes for count elements of T. Panics on a count whose byte
+    /// size does not fit a usize, rather than allocating the wrapped remainder.
     #[inline]
     fn alloc_raw_zeroed<T>(&self, count: usize) -> *mut u8 {
-        let size = mem::size_of::<T>() * count;
+        let size = mem::size_of::<T>()
+            .checked_mul(count)
+            .expect("arena array size overflow");
         if size == 0 {
             return mem::align_of::<T>() as *mut u8;
         }
@@ -478,7 +481,7 @@ macro_rules! afmt {
 
 #[cfg(test)]
 mod tests {
-    use super::tracked_file;
+    use super::{tracked_file, Arena};
 
     /// The tracker stores the pointer, so a path must terminate exactly once and
     /// stay put - the second lookup has to hand back the same string, not a fresh
@@ -496,5 +499,15 @@ mod tests {
         // pointer is valid for the rest of the process.
         let text = unsafe { core::ffi::CStr::from_ptr(first) };
         assert_eq!(text.to_bytes(), b"src/host/application.rs");
+    }
+
+    /// A wrapped `count * size_of::<T>()` would reserve a fraction of the bytes the caller then
+    /// writes count elements into, so the multiply has to refuse instead. The panic lands before
+    /// the arena is touched, hence the small reservation.
+    #[test]
+    #[should_panic(expected = "arena array size overflow")]
+    fn a_zeroed_count_whose_byte_size_overflows_panics() {
+        let arena = Arena::new(1 << 16);
+        arena.alloc_raw_zeroed::<u64>(usize::MAX / 4 + 1);
     }
 }

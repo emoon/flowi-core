@@ -140,17 +140,17 @@ const _: () = {
 
 /// Allocate count uninitialised T out of arena - the array a result struct hands back by pointer.
 ///
+/// Panics on a count whose byte size does not fit a usize, rather than allocating the wrapped
+/// remainder and letting the caller write count elements into it.
+///
 /// # Safety
 /// arena must be a live arena for the call, and the caller must initialise every element it lets C read.
 pub unsafe fn arena_alloc_array<T>(arena: *mut FlArena, count: usize) -> *mut T {
+    let size = count
+        .checked_mul(core::mem::size_of::<T>())
+        .expect("arena array size overflow");
     // SAFETY: arena is live for the call - the caller's contract.
-    unsafe {
-        arena_alloc_raw(
-            arena,
-            (count * core::mem::size_of::<T>()) as u64,
-            core::mem::align_of::<T>() as u64,
-        ) as *mut T
-    }
+    unsafe { arena_alloc_raw(arena, size as u64, core::mem::align_of::<T>() as u64) as *mut T }
 }
 
 /// Move one T into arena and return the pointer C holds it by. The value's destructor never runs - arena
@@ -351,6 +351,16 @@ mod tests {
                 core::slice::from_raw_parts(slots, 3).to_vec()
             };
             assert_eq!(values, [7, 8, 9]);
+        }
+
+        /// Same contract as the C array macros: an overflowing count refuses rather than handing
+        /// back the wrapped remainder for the caller to overrun.
+        #[test]
+        #[should_panic(expected = "arena array size overflow")]
+        fn arena_alloc_array_refuses_a_count_whose_byte_size_overflows() {
+            let arena = Arena::new(RESERVE);
+            // SAFETY: arena is live; the multiply panics before the allocation is attempted.
+            unsafe { arena_alloc_array::<u64>(arena.as_raw(), usize::MAX / 4 + 1) };
         }
 
         #[test]

@@ -10,8 +10,20 @@
 
 #include <flowi/arena/arena.h>
 #include <flowi/core/platform.h>
+#include <stdint.h>
 
 #ifndef __cplusplus
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// Element count to byte count
+//
+// Saturating, not wrapping: a count whose byte size does not fit asks for UINT64_MAX bytes, which the
+// allocator rejects as a size overflow. A wrapped product would instead pass the allocator's checks and
+// hand back a block far shorter than the `count` elements the caller goes on to write.
+
+static inline uint64_t arena_array_bytes(uint64_t count, uint64_t element_size) {
+    return count > UINT64_MAX / element_size ? UINT64_MAX : count * element_size;
+}
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 // Typed allocation (thread-safe by default)
@@ -20,25 +32,27 @@
 
 #define arena_pos_type(arena, type) ((type*)arena_aligned_pos(arena, _Alignof(type)))
 
-#define arena_alloc_array(arena, type, count) ((type*)arena_alloc_raw(arena, (count) * sizeof(type), _Alignof(type)))
+#define arena_alloc_array(arena, type, count) \
+    ((type*)arena_alloc_raw(arena, arena_array_bytes((count), sizeof(type)), _Alignof(type)))
 
 #define arena_alloc_zero(arena, type) ((type*)arena_alloc_raw_zero(arena, sizeof(type), _Alignof(type)))
 
 #define arena_alloc_array_zero(arena, type, count) \
-    ((type*)arena_alloc_raw_zero(arena, (count) * sizeof(type), _Alignof(type)))
+    ((type*)arena_alloc_raw_zero(arena, arena_array_bytes((count), sizeof(type)), _Alignof(type)))
 
 // Single-threaded variants - only for an arena no other thread touches.
 #define arena_alloc_st(arena, type) ((type*)arena_alloc_raw_st(arena, sizeof(type), _Alignof(type)))
 
 #define arena_alloc_array_st(arena, type, count) \
-    ((type*)arena_alloc_raw_st(arena, (count) * sizeof(type), _Alignof(type)))
+    ((type*)arena_alloc_raw_st(arena, arena_array_bytes((count), sizeof(type)), _Alignof(type)))
 
 #define arena_alloc_zero_st(arena, type) ((type*)arena_alloc_raw_zero_st(arena, sizeof(type), _Alignof(type)))
 
 #define arena_alloc_array_zero_st(arena, type, count) \
-    ((type*)arena_alloc_raw_zero_st(arena, (count) * sizeof(type), _Alignof(type)))
+    ((type*)arena_alloc_raw_zero_st(arena, arena_array_bytes((count), sizeof(type)), _Alignof(type)))
 
-#define arena_compact(arena, type, count_to_release) arena_compact_bytes(arena, (count_to_release) * sizeof(type))
+#define arena_compact(arena, type, count_to_release) \
+    arena_compact_bytes(arena, arena_array_bytes((count_to_release), sizeof(type)))
 
 // Complete elements of `type` between start_ptr and the arena's current position.
 #define arena_count(arena, start_ptr, type) arena_count_elements(arena, start_ptr, sizeof(type))
