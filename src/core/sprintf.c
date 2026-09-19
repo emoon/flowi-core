@@ -2216,7 +2216,6 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 typedef struct SprintfArenaContext {
     FlArena* arena;
-    char* start;
     u64 total_len;
 } SprintfArenaContext;
 
@@ -2237,17 +2236,38 @@ static char* sprintf_arena_callback(const char* buf, void* user, int len) {
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
-FlString vsprintf_arena(FlArena* arena, const char* format, va_list args) {
-    SprintfArenaContext ctx = { .arena = arena };
+// stb hands the output over one chunk at a time and the caller treats the whole run as one string, so
+// the chunks have to be contiguous - which only holds on an arena nothing else allocates from mid-format.
+static FlString sprintf_assemble(FlArena* scratch, const char* format, va_list args) {
+    SprintfArenaContext ctx = { .arena = scratch };
 
-    u64 start_pos = arena->pos;
+    const u64 start_pos = atomic_load_explicit(&scratch->pos, memory_order_relaxed);
 
     char temp_buffer[STB_SPRINTF_MIN];
     stbsp_vsprintfcb(sprintf_arena_callback, &ctx, temp_buffer, format, args);
 
     // Cast to char* for pointer arithmetic (MSVC doesn't support void* arithmetic)
     // Default to is_ascii = 0 (conservative - formatted output may contain UTF-8 from %S args)
-    return (FlString) { .data = (char*)arena->ptr + start_pos, .length = ctx.total_len, .is_ascii = 0 };
+    return (FlString) { .data = (char*)scratch->ptr + start_pos, .length = ctx.total_len, .is_ascii = 0 };
+}
+
+///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+FlString vsprintf_arena(FlArena* arena, const char* format, va_list args) {
+    // The conflict argument keeps the assembly off arena itself when a caller formats into its own
+    // scratch scope - the other scratch arena is used instead.
+    arena_scratch_auto_conflict(scratch, arena);
+
+    const FlString assembled = sprintf_assemble(scratch.arena, format, args);
+
+    if (assembled.length == 0) {
+        return (FlString) { .data = "", .length = 0, .is_ascii = 0 };
+    }
+
+    char* dest = arena_alloc_array(arena, char, assembled.length);
+    memory_copy(dest, assembled.length, assembled.data, assembled.length);
+
+    return (FlString) { .data = dest, .length = assembled.length, .is_ascii = 0 };
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -2264,32 +2284,18 @@ FlString sprintf_arena(FlArena* arena, const char* format, ...) {
 // Multi-Threaded Arena Sprintf Implementation
 
 FlString vsprintf_arena_mt(FlArenaMt* arena_mt, const char* format, va_list args) {
-    // Assemble the full message in the thread-local scratch arena first (chunks are
-    // contiguous there because nothing else allocates from it mid-format), then do a
-    // SINGLE atomic bump on the shared MT arena and copy once. A per-chunk MT
-    // allocation would let another thread's bytes land between our chunks and corrupt
-    // the returned (assumed-contiguous) FlString.
     arena_scratch_auto(scratch);
 
-    SprintfArenaContext ctx = { .arena = scratch.arena };
-    u64 start_pos = scratch.arena->pos;
+    const FlString assembled = sprintf_assemble(scratch.arena, format, args);
 
-    char temp_buffer[STB_SPRINTF_MIN];
-    stbsp_vsprintfcb(sprintf_arena_callback, &ctx, temp_buffer, format, args);
-
-    // Empty / zero-length result: preserve the existing empty-string return.
-    if (ctx.total_len == 0) {
+    if (assembled.length == 0) {
         return (FlString) { .data = "", .length = 0, .is_ascii = 0 };
     }
 
-    const char* assembled = (char*)scratch.arena->ptr + start_pos;
+    char* dest = arena_mt_alloc_array(arena_mt, char, assembled.length);
+    memory_copy(dest, assembled.length, assembled.data, assembled.length);
 
-    // Single contiguous allocation on the shared MT arena (one atomic bump).
-    char* dest = arena_mt_alloc_array(arena_mt, char, ctx.total_len);
-    memory_copy(dest, ctx.total_len, assembled, ctx.total_len);
-
-    // Default to is_ascii = 0 (conservative - formatted output may contain UTF-8 from %S args)
-    return (FlString) { .data = dest, .length = ctx.total_len, .is_ascii = 0 };
+    return (FlString) { .data = dest, .length = assembled.length, .is_ascii = 0 };
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////

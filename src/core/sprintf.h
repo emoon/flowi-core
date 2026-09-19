@@ -21,22 +21,26 @@ struct FlArenaMt;
 //   sprintf_arena(arena, "Position: %v4f", pos);   // "Position: [10.5, 20.25, -5, 1]"
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
+// The result is one contiguous run of bytes in arena, whatever else is allocating from it: the
+// message is assembled in a thread-local scratch arena and the arena is bumped once. A caller
+// formatting into a scratch scope of its own may pass that scratch arena - assembly moves to the
+// other one. Both entry points take the calling thread's scratch arenas, so neither may be called
+// from a signal handler or from anything reached by one.
+//
 // sprintf_arena itself is declared FL_API in <flowi/string/string.h>, reached through string.h
 // above; redeclaring it bare here clashes with its dllimport on clang-cl. The va_list and
 // FlArenaMt entry points are not in the generated surface, so they stay here.
 FlString vsprintf_arena(struct FlArena* arena, const char* format, va_list args);
 
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// Thread-safe sprintf - uses FlArenaMt for concurrent allocations
+// sprintf onto an FlArenaMt
 //
-// These functions are identical to sprintf_arena/vsprintf_arena but use
-// FlArenaMt for thread-safe allocation. Use these when formatting
-// strings from multiple threads concurrently.
+// Same contract as sprintf_arena/vsprintf_arena, for the arenas held as FlArenaMt rather than
+// FlArena.
 //
 // Example:
 //   FlArenaMt* arena_mt = arena_mt_new();
 //   FlString msg = vsprintf_arena_mt(arena_mt, "Error: %S", error_path);
-//   // Can be called safely from multiple threads
 
 FlString sprintf_arena_mt(struct FlArenaMt* arena_mt, const char* format, ...);
 FlString vsprintf_arena_mt(struct FlArenaMt* arena_mt, const char* format, va_list args);
