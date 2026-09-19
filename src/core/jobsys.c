@@ -476,6 +476,10 @@ FlJobHandle fl_jobs_add_job_with_priority_and_dependency(FlJobsFunc func, void* 
 
     JobInfo* dep_job = &self->start_jobs[dep_index];
 
+    // Not paired with the status read below: the dependency can finish and its slot be reused across the
+    // free-list section, leaving that read and the prepend on the new occupant. Harmless - a slot is only
+    // recycled after its job completed, so the dependency is done, and the re-check after the prepend
+    // releases the job when the occupant reports COMPLETED/FREE/PROMOTING. Costs a wait, never an order.
     if (atomic_load(&dep_job->generation) != dep_generation) {
         // Dependency was recycled - treat as no dependency
         return fl_jobs_add_job_with_priority(func, user_data, priority);
