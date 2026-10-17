@@ -11,6 +11,11 @@
 #define FILE_WATCHER_COALESCE_WINDOW_US 100000 // 100ms
 #define FILE_WATCHER_MAX_CALLBACKS 32
 
+// Directories one recursive watcher can map on a platform that watches each directory on its own
+// (Linux inotify). A tree with more is refused outright rather than watched in part. Sized for
+// trees an application watches whole, such as a directory of plugins and their asset folders.
+#define FILE_WATCHER_MAX_RECURSIVE_DIRECTORIES 1024
+
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
 
 typedef struct CallbackRegistration {

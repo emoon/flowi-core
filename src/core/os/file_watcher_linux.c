@@ -173,7 +173,7 @@ FileWatcherError platform_start_watching(FileWatcherState* state) {
     data->inotify_fd = fd;
     data->notify_mask = mask;
     data->recursive = state->config.recursive;
-    fixed_array_new(&data->watches, get_file_watcher_registry()->arena, 32);
+    fixed_array_new(&data->watches, get_file_watcher_registry()->arena, FILE_WATCHER_MAX_RECURSIVE_DIRECTORIES);
 
     const int watch_errno = add_watch_for_directory(data, state->watch_path, get_file_watcher_registry()->arena);
     if (watch_errno != 0) {
