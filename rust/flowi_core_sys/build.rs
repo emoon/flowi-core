@@ -22,10 +22,6 @@ fn main() {
     if std::env::var_os("FLOWI_CORE_SYS_SKIP_NATIVE_LINK").is_some_and(|v| v == "1") {
         return;
     }
-    // The same decision, taken by a cargo dependent instead of a build system.
-    if std::env::var_os("CARGO_FEATURE_NATIVE").is_none() {
-        return;
-    }
 
     // FLOWI_CORE_SYS_STATIC_LINK is the other host shape: core built by the driving build
     // system as a static archive and linked into the binary cargo produces, together with
@@ -34,12 +30,27 @@ fn main() {
     // archive or shared library, `framework=<Name>`, or a bare library name for the
     // system linker. Nothing is bundled into the rlib: the archives are named by search
     // path and linked once, at the final link, in the order given.
+    //
+    // It is read before the `native` feature, and holds with the feature off. That
+    // feature is a dependent's way of saying another library already carries core;
+    // a driving build system that names the archives outright is being more specific.
+    // It is also the one shape where the placement matters: rustc puts a crate's
+    // native libraries straight after that crate's rlib, and this crate is the last
+    // rlib on the line, so archives named here resolve every crate's references to
+    // them - the global allocator's heap_* calls in this crate included - under a
+    // linker that scans archives once, in order, as GNU ld does.
     println!("cargo:rerun-if-env-changed=FLOWI_CORE_SYS_STATIC_LINK");
     if let Some(inputs) = std::env::var_os("FLOWI_CORE_SYS_STATIC_LINK").filter(|v| !v.is_empty()) {
         let inputs = inputs.to_string_lossy().into_owned();
         for input in inputs.split(':').filter(|s| !s.is_empty()) {
             emit_static_link_input(input);
         }
+        return;
+    }
+
+    // FLOWI_CORE_SYS_SKIP_NATIVE_LINK's decision, taken by a cargo dependent instead of a
+    // build system.
+    if std::env::var_os("CARGO_FEATURE_NATIVE").is_none() {
         return;
     }
 
